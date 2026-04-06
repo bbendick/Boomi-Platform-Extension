@@ -1,3 +1,12 @@
+let _bph_nav_init = false;
+function _bph_init_once() {
+  if (_bph_nav_init) return;
+  _bph_nav_init = true;
+  console.log("[BPH] init fired, title:", document.title);
+  onNavigationChange();
+  updateNotificationCheck();
+}
+
 let boomi_title = document.title;
 let boomiPageLoaded = setInterval(() => {
   if (boomi_title != document.title) {
@@ -44,10 +53,12 @@ let boomiPageLoaded = setInterval(() => {
         );
       });
     }
-    onNavigationChange();
-    updateNotificationCheck();
+    _bph_init_once();
   }
 }, 250);
+
+// Fallback for new React UI where title may already be set at document_end
+setTimeout(_bph_init_once, 3000);
 
 function onNavigationChange() {
   var urlPath = getUrlpath();
@@ -55,14 +66,18 @@ function onNavigationChange() {
   // unique page titles and favicons
   try {
     chrome.storage.sync.get(["unique_titles_and_favicons"], function (e) {
-      if (chrome.runtime.lastError) return;
-      if (e.unique_titles_and_favicons == "on") {
+      if (chrome.runtime.lastError) {
+        console.log("[BPH] lastError:", chrome.runtime.lastError);
+        return;
+      }
+      console.log("[BPH] unique_titles_and_favicons:", e.unique_titles_and_favicons);
+      if (e.unique_titles_and_favicons !== "off") {
         removeAccountPrefixFromDocumentTitle();
         changeFaviconBasedOnPage();
       }
     });
   } catch (e) {
-    // Extension context invalidated (e.g. extension reloaded while page open)
+    console.log("[BPH] storage exception:", e);
   }
 }
 
@@ -73,9 +88,9 @@ changeFaviconImage(
 
 // run on window change states
 window.addEventListener("popstate", onNavigationChange);
-window.addEventListener("onhashchange", onNavigationChange);
-document.addEventListener("visibilitychange", (event) => {
-  if (document.visibilityState != "visible") {
+window.addEventListener("hashchange", onNavigationChange);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
     onNavigationChange();
   }
 });
@@ -83,9 +98,10 @@ document.addEventListener("visibilitychange", (event) => {
 function removeAccountPrefixFromDocumentTitle() {
   // Change Page Title to Drop Account Prefix
   setTimeout(function () {
-    var accountNameEl = document.getElementsByClassName(
-      "qm-c-inlinemenu__settings-menu-item-name",
-    )[1];
+    // Old nav: second element with this class. New nav: account switcher button.
+    var accountNameEl =
+      document.getElementsByClassName("qm-c-inlinemenu__settings-menu-item-name")[1] ||
+      document.querySelector('[data-testid="account-switcher-button"]');
     if (!accountNameEl) return;
     var title = document.title
       .replace(accountNameEl.innerHTML, "")
@@ -101,6 +117,7 @@ function changeFaviconBasedOnPage() {
   var pageName = getPageNameWithoutExtension();
   var gwtPage = getGWTPageName();
   var svgIcon = "";
+  console.log("[BPH] favicon check — subdomain:", subdomain, "pageName:", pageName, "gwtPage:", gwtPage, "href:", window.location.href);
 
   switch (subdomain) {
     case "platform":
@@ -151,22 +168,51 @@ function changeFaviconToSVG(svgIcon) {
   changeFaviconImage(iconHrefData);
 }
 
-function changeFaviconImage(link) {
-  // creates or updates the favicon based on what page you're on
-  var faviconIcon =
-    document
-      .getElementsByTagName("head")[0]
-      .querySelector("link[rel~='icon']") ||
-    document
-      .getElementsByTagName("head")[0]
-      .querySelector("link[rel='shortcut icon']");
+var _bph_desired_favicon = null;
+var _bph_favicon_observer = null;
 
+function _bph_applyFavicon(link) {
+  var head = document.getElementsByTagName("head")[0];
+  // Remove all existing favicon links (app's), leave ours marked with data-bph
+  head.querySelectorAll("link[rel~='icon']:not([data-bph]), link[rel='shortcut icon']:not([data-bph])").forEach(function (el) {
+    el.parentNode.removeChild(el);
+  });
+  // Update or create our element
+  var faviconIcon = head.querySelector("link[data-bph]");
   if (!faviconIcon) {
     faviconIcon = document.createElement("link");
     faviconIcon.rel = "icon";
-    document.getElementsByTagName("head")[0].appendChild(faviconIcon);
+    faviconIcon.setAttribute("data-bph", "true");
+    head.appendChild(faviconIcon);
   }
-  if (faviconIcon) {
-    faviconIcon.href = link;
+  if (link.startsWith("data:image/svg+xml") || link.endsWith(".svg")) {
+    faviconIcon.type = "image/svg+xml";
+  } else if (link.startsWith("data:image/png") || link.endsWith(".png")) {
+    faviconIcon.type = "image/png";
+  }
+  faviconIcon.href = link;
+}
+
+function changeFaviconImage(link) {
+  _bph_desired_favicon = link;
+  _bph_applyFavicon(link);
+
+  // Watch for the app re-adding its own favicon element after ours
+  if (!_bph_favicon_observer) {
+    var head = document.getElementsByTagName("head")[0];
+    _bph_favicon_observer = new MutationObserver(function (mutations) {
+      if (!_bph_desired_favicon) return;
+      var appAddedFavicon = mutations.some(function (m) {
+        return Array.from(m.addedNodes).some(function (n) {
+          return n.nodeType === 1 && n.tagName === "LINK" &&
+            n.rel && n.rel.indexOf("icon") !== -1 &&
+            !n.getAttribute("data-bph");
+        });
+      });
+      if (appAddedFavicon) {
+        _bph_applyFavicon(_bph_desired_favicon);
+      }
+    });
+    _bph_favicon_observer.observe(head, { childList: true });
   }
 }
