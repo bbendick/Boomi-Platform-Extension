@@ -58,7 +58,10 @@ let wait_for_load = setInterval(() => {
             `,
         );
         var mastfoot = document.getElementById("mastfoot");
-        if (mastfoot) mastfoot.classList.remove("mastfoot-hidden");
+        if (mastfoot) {
+          mastfoot.classList.remove("mastfoot-hidden");
+          window.dispatchEvent(new Event("resize"));
+        }
 
         document.getElementById("bph-options-link").addEventListener("click", function (e) {
           e.preventDefault();
