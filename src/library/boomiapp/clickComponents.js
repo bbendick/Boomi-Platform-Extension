@@ -94,6 +94,110 @@ $(document).ready(function () {
   });
 });
 
+// ── Deploy wizard step 1: capture environment name (and atomId when findable) ──
+
+document.arrive('.form_title_label:not(.no_display)', { existing: true }, function (titleEl) {
+  if (titleEl.textContent.trim() !== 'Deploy: Select Packaged Components') return;
+
+  var modal = titleEl.closest('.popupContent, [role="dialog"]') || document.body;
+
+  function captureEnv() {
+    var dts = modal.querySelectorAll('dt');
+    for (var i = 0; i < dts.length; i++) {
+      if (dts[i].textContent.trim() === 'Environment') {
+        var dd = dts[i].nextElementSibling;
+        if (dd && dd.tagName === 'DD' && dd.textContent.trim()) {
+          sessionStorage.setItem('bph_deploy_env', dd.textContent.trim());
+          // TODO: look for atomId in data attributes or links near the dd
+          // e.g. dd.querySelector('[data-atom-id]') or a nearby anchor href
+        }
+        break;
+      }
+    }
+  }
+
+  // Capture immediately and re-capture if the user changes the environment
+  captureEnv();
+  new MutationObserver(captureEnv).observe(modal, { subtree: true, childList: true, characterData: true });
+});
+
+// ── Deployment Successful modal: inject "View on Runtime" button ──────────────
+
+document.arrive('[data-locator="button-view-deployments"]', { existing: true }, function (viewDeploymentsBtn) {
+  var buttonSet = viewDeploymentsBtn.closest('.button_set');
+  if (!buttonSet || buttonSet.querySelector('.bph-view-runtime-btn')) return;
+
+  // Process name is in the editable label's title attribute
+  var processNameEl = Array.from(document.querySelectorAll('.gwt-EditableLabel.name_label[title]'))
+    .find(function (el) { return el.getAttribute('title').trim() !== 'Loading...'; });
+  var processName = processNameEl ? processNameEl.getAttribute('title').trim() : '';
+  console.log('[BPH] deployment modal — processNameEl:', processNameEl, 'processName:', processName);
+
+  var processReportingEl = document.querySelector('[data-locator="link-process-reporting"]');
+  var accountId =
+    getUrlParameter("accountId") ||
+    (processReportingEl && processReportingEl.href.split("=").pop().split(";")[0]);
+
+  var envName = sessionStorage.getItem('bph_deploy_env') || '';
+  var atomId = '4e7219c4-fb66-40b5-ab23-0a5c9a32b5b1';
+
+  var btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'gwt-Button qm-button--primary-action bph-view-runtime-btn';
+  btn.textContent = 'View on Runtime';
+  btn.title = (processName ? '"' + processName + '"' : 'Process') +
+    (envName ? ' on ' + envName : ' on runtime');
+
+  btn.addEventListener('click', function () {
+    console.log('[BPH] View on Runtime clicked — processName:', processName);
+    if (processName) localStorage.setItem('bph_runtime_filter', processName);
+    sessionStorage.removeItem('bph_deploy_env');
+    var url = 'https://platform.boomi.com/AtomSphere.html#atom;accountId=' + accountId +
+      ';atomId=' + atomId + ';selection=deployed';
+    window.open(url, '_blank');
+  });
+
+  buttonSet.appendChild(btn);
+});
+
+// ── Atom management page: apply stored filter from localStorage ──────────────
+
+var _bph_filter_applied = false;
+document.arrive('.filter_input', { existing: true }, function (filterInput) {
+  if (_bph_filter_applied) return;
+
+  console.log('[BPH] filter_input arrived, hash:', window.location.hash);
+  console.log('[BPH] bph_runtime_filter in localStorage:', localStorage.getItem('bph_runtime_filter'));
+
+  var pendingFilter = localStorage.getItem('bph_runtime_filter') ||
+    getUrlParameter('bph_filter');
+  if (!pendingFilter) {
+    console.log('[BPH] no pending filter, skipping');
+    return;
+  }
+
+  var hash = window.location.hash;
+  if (hash.indexOf('#atom;') === -1 || hash.indexOf('selection=deployed') === -1) {
+    console.log('[BPH] hash does not match atom/deployed pattern, skipping');
+    return;
+  }
+
+  _bph_filter_applied = true;
+  localStorage.removeItem('bph_runtime_filter');
+  console.log('[BPH] applying filter:', pendingFilter, '— waiting 2s for list to load');
+
+  setTimeout(function () {
+    console.log('[BPH] setting filter_input value');
+    filterInput.value = pendingFilter;
+    filterInput.dispatchEvent(new Event('input', { bubbles: true }));
+    filterInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', keyCode: 13 }));
+    var searchBtn = document.querySelector('[data-locator="link-search"]');
+    if (searchBtn && !searchBtn.hasAttribute('disabled')) searchBtn.click();
+  }, 2000);
+});
+
+// ── Process monitor link on component detail panel ────────────────────────────
+
 document.arrive('[data-locator="link-description"]', { existing: true }, function (descLink) {
   var linksDiv = descLink.closest('.links');
   if (!linksDiv || linksDiv.querySelector('.bph-monitor-link')) return;
